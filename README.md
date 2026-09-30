@@ -77,27 +77,35 @@ python3 main.py --round2          # Round 2 shift experiment
 `main.py` options: `--runs`, `--pop`, `--gens`, `--train-seeds`,
 `--test-seeds`, `--seed`, `--outdir`.
 
-## Live demo (hosted simulation)
+## Demo
 
-`streamlit_app.py` is an interactive demo: pick a threshold strategy
-(fixed slider, precomputed GA-optimized, or oracle), tweak spread
-probability / cooldown / noise, and watch the epidemic curve plus the
-`F` breakdown — or run a head-to-head comparison on fresh seeds.
+Two demos, different trade-offs:
 
-Run it locally:
+- **Static site** (recommended for sharing):
+  <https://venky29823.github.io/epidemic-breakers-web/> — zero-dependency
+  HTML/CSS/vanilla-JS in the
+  [epidemic-breakers-web](https://github.com/venky29823/epidemic-breakers-web)
+  repo. It **re-implements the simulator in JavaScript** (`sim.js`: cascade
+  dynamics, fitness, edge betweenness, and a small in-browser GA) and bakes
+  in **precomputed data exported from this repo** — the exact 40-node /
+  111-edge graph, its per-edge noise/spread parameters, and the
+  GA-optimized thresholds (`data/*.json`). `scripts/check_web_parity.py`
+  verifies the baked-in constants agree with the Python source of truth
+  (graph size, edge identity/order, per-edge params, best_theta, sim
+  defaults); known differences are documented in that script's output
+  (JS vs numpy RNG streams differ, so single-scenario trajectories differ —
+  parity is statistical).
+- **Streamlit app** (`streamlit_app.py` in this repo): the same simulator
+  running live in Python. Run locally with
+  `pip install -r requirements.txt && streamlit run streamlit_app.py`,
+  or host free on [Streamlit Community Cloud](https://share.streamlit.io)
+  (repo `venky29823/epidemic-breakers-optiforge26`, branch `main`, main
+  file `streamlit_app.py`).
 
-```bash
-pip install -r requirements.txt
-streamlit run streamlit_app.py
-```
-
-Host it free on Streamlit Community Cloud:
-
-1. Go to [share.streamlit.io](https://share.streamlit.io) and sign in
-   with GitHub.
-2. **New app** → repository `venky29823/epidemic-breakers-optiforge26`,
-   branch `main`, main file path `streamlit_app.py`.
-3. **Deploy** — done. You get a public URL to share.
+Pick a threshold strategy (fixed slider, precomputed GA-optimized, or the
+oracle reference), tweak spread probability / cooldown / noise, and watch
+the epidemic curve plus the `F` breakdown — or run a head-to-head
+comparison on fresh seeds.
 
 ## Results (Round 1)
 
@@ -156,6 +164,24 @@ of recovery, not final quality — it pays a small upfront cost from the
 diversity noise (see the early part of `results/recovery.svg`) and then
 adapts steadily. Both adapted methods beat doing nothing (stale mean
 37.80). Raw curves: `results/round2_curves.csv`.
+
+## Known limitations
+
+- **Small n for Round 2**: 2 reps. The recovery-speed claim is about
+  reliability across the reps we ran, not a tight estimate — treat the
+  5/7-generation figures as indicative.
+- **Train/test gap**: real and reported (train ~21, test ~33 for the
+  guided GA). Part overfitting to 24 train seeds, part irreducible
+  scenario variance (test-F std ~10 even for the oracle). The
+  `--ablation` train/test diagnostic in `results/ablation.csv` separates
+  the two per method.
+- **Oracle is a heuristic**: `theta = clip(noise_amp + 0.10)` uses hidden
+  per-edge noise values no real tuner can see. It marks headroom, not a
+  ceiling — a method beating it would not be a contradiction.
+- **Shifts tested**: environment shift (spread 0.25→0.45, cooldown 5→12)
+  and edge-removal shift (`--round2-graph-shift`, ~10% of edges). Other
+  shift types (new services, correlated noise, weight changes) are
+  supported by the code paths but not measured in the report.
 
 ## Defense notes (for the judges)
 
