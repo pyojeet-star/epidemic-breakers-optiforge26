@@ -25,6 +25,7 @@ from src.utils import (
     get_logger,
     make_rng,
     make_seeds,
+    paired_bootstrap_ci,
     save_convergence_svg,
     write_csv,
 )
@@ -48,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--round2", action="store_true", help="run the Round 2 shift experiment")
     p.add_argument("--round2-graph-shift", action="store_true",
                    help="also remove ~10% of edges in the Round 2 shift")
+    p.add_argument("--ablation", action="store_true",
+                   help="paired guided vs vanilla GA vs random search over --runs runs")
     return p
 
 
@@ -266,12 +269,125 @@ def run_round2(args) -> list[dict]:
     return rows
 
 
+def run_ablation(args) -> list[dict]:
+    """Paired ablation: guided GA vs vanilla GA vs random search.
+
+    ``args.runs`` runs (default 10; 2 under ``--quick``). Run ``i`` draws
+    its own train/test seed sets and all three methods train and test on
+    those identical sets, so per-run differences are paired. Every method
+    gets the same evaluation budget: ``pop * (gens + 1)``, matching the
+    GA's initial population plus one fitness evaluation per individual
+    per generation.
+
+    Prints per-method mean/sd, the paired (vanilla - guided) differences,
+    and a paired bootstrap 95% CI for the mean difference. Saves per-run
+    rows -- train F, test F and test-F std for each method's final theta,
+    i.e. the train/test diagnostic -- to ``results/ablation.csv`` and the
+    summary to ``results/ablation_summary.csv``.
+    """
+    G = graph_gen.generate_service_graph(n_nodes=40, seed=7)
+    log.info("graph: %d nodes, %d edges", G.number_of_nodes(),
+             G.number_of_edges())
+    n_runs = args.runs
+    budget = args.pop * (args.gens + 1)  # == GA evals: initial pop + one per gen
+    cfg_v = gamod.GAConfig(pop_size=args.pop, generations=args.gens,
+                           mutation_mode="uniform")
+    cfg_g = gamod.GAConfig(pop_size=args.pop, generations=args.gens,
+                           mutation_mode="guided")
+    methods = ["random-search", "vanilla GA", "guided GA"]
+
+    rows: list[dict] = []
+    for run in range(n_runs):
+        train_seeds = make_seeds(args.train_seeds, base=1000 + run)
+        test_seeds = make_seeds(args.test_seeds, base=2000 + run)
+        assert not set(train_seeds) & set(test_seeds)
+
+        t0 = time.time()
+        rs = blmod.random_search(G, train_seeds, test_seeds, budget,
+                                 make_rng(args.seed + 5000 + run), **ROUND1_KW)
+        rows.append(_ablation_row("random-search", run, rs["train_F"],
+                                  rs["test"], rs["evals"], time.time() - t0))
+
+        for name, cfg in (("vanilla GA", cfg_v), ("guided GA", cfg_g)):
+            t0 = time.time()
+            ga_rng = make_rng(args.seed + 6000 + run * 10
+                              + (0 if name == "vanilla GA" else 1))
+            res = gamod.run_ga(G, train_seeds, cfg, ga_rng, **ROUND1_KW)
+            test = fitmod.evaluate(G, res["best"], test_seeds, **ROUND1_KW)
+            rows.append(_ablation_row(name, run, res["best_F"], test,
+                                      res["evals"], time.time() - t0))
+        log.info("ablation run %d/%d done", run + 1, n_runs)
+
+    test_f = {m: np.array([r["test_F"] for r in rows if r["method"] == m])
+              for m in methods}
+    train_f = {m: np.array([r["train_F"] for r in rows if r["method"] == m])
+               for m in methods}
+    diffs = test_f["vanilla GA"] - test_f["guided GA"]  # > 0 favours guided
+    d_mean, d_lo, d_hi = paired_bootstrap_ci(
+        diffs, rng=make_rng(args.seed + 777))
+
+    print(f"\nABLATION: paired runs, equal budget ({budget} evals each)")
+    print("-" * 78)
+    print(f"{'method':<15}{'n':<4}{'train F':<10}{'test F (mean ± sd)':<22}")
+    print("-" * 78)
+    for m in methods:
+        sd = test_f[m].std(ddof=1) if n_runs > 1 else 0.0
+        print(f"{m:<15}{n_runs:<4}{train_f[m].mean():<10.2f}"
+              f"{test_f[m].mean():.2f} ± {sd:.2f}")
+    print("-" * 78)
+    d_sd = diffs.std(ddof=1) if n_runs > 1 else 0.0
+    print(f"paired (vanilla - guided) test F: mean {d_mean:.2f}, sd {d_sd:.2f}")
+    print(f"paired bootstrap 95% CI for the mean difference: "
+          f"[{d_lo:.2f}, {d_hi:.2f}]  (positive favours guided)")
+    n_pos = int((diffs > 0).sum())
+    print(f"guided won {n_pos}/{n_runs} paired runs")
+
+    outdir = ensure_dir(args.outdir)
+    write_csv(outdir / "ablation.csv", rows, list(rows[0].keys()))
+    summary = [
+        {"method": m, "n_runs": n_runs,
+         "mean_train_F": round(float(train_f[m].mean()), 3),
+         "mean_test_F": round(float(test_f[m].mean()), 3),
+         "sd_test_F": round(float(test_f[m].std(ddof=1)) if n_runs > 1 else 0.0, 3),
+         "paired_diff_mean": "", "paired_diff_ci_lo": "", "paired_diff_ci_hi": ""}
+        for m in methods
+    ]
+    summary.append({"method": "paired: vanilla - guided", "n_runs": n_runs,
+                    "mean_train_F": "", "mean_test_F": "",
+                    "sd_test_F": round(float(d_sd), 3),
+                    "paired_diff_mean": round(d_mean, 3),
+                    "paired_diff_ci_lo": round(d_lo, 3),
+                    "paired_diff_ci_hi": round(d_hi, 3)})
+    write_csv(outdir / "ablation_summary.csv", summary,
+              ["method", "n_runs", "mean_train_F", "mean_test_F", "sd_test_F",
+               "paired_diff_mean", "paired_diff_ci_lo", "paired_diff_ci_hi"])
+    log.info("wrote %s, %s", outdir / "ablation.csv",
+             outdir / "ablation_summary.csv")
+    return rows
+
+
+def _ablation_row(method: str, run: int, train_f: float, test: dict,
+                  evals: int, secs: float) -> dict:
+    """One per-run ablation record: train/test diagnostic for a final theta."""
+    return {
+        "method": method,
+        "run": run,
+        "train_F": round(train_f, 3),
+        "test_F": round(test["F"], 3),
+        "test_F_std": round(test["F_std"], 3),
+        "evals": evals,
+        "secs": round(secs, 1),
+    }
+
+
 def main() -> None:
     args = build_parser().parse_args()
     if args.quick:  # tiny budgets for smoke tests
         args.pop, args.gens = 8, 6
         args.train_seeds, args.test_seeds, args.runs = 4, 4, 2
-    if args.round2:
+    if args.ablation:
+        run_ablation(args)
+    elif args.round2:
         run_round2(args)
     else:
         run_comparison(args)

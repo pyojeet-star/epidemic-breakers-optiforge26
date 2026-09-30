@@ -14,6 +14,30 @@ def make_rng(seed: int) -> np.random.Generator:
     return np.random.default_rng(seed)
 
 
+def paired_bootstrap_ci(
+    diffs: Sequence[float],
+    n_boot: int = 10000,
+    ci: float = 0.95,
+    rng: np.random.Generator | None = None,
+) -> tuple[float, float, float]:
+    """Paired bootstrap confidence interval for the mean difference.
+
+    Resamples run indices with replacement ``n_boot`` times, recomputes the
+    mean difference each time, and returns ``(mean, lower, upper)`` from the
+    percentile interval. Pure numpy -- no scipy. Deterministic given ``rng``.
+    """
+    d = np.asarray(diffs, dtype=float)
+    if d.size == 0:
+        raise ValueError("need at least one difference")
+    rng = rng if rng is not None else np.random.default_rng()
+    boots = np.array([d[rng.integers(0, d.size, size=d.size)].mean()
+                      for _ in range(n_boot)])
+    alpha = 1.0 - ci
+    lo = float(np.percentile(boots, 100 * alpha / 2))
+    hi = float(np.percentile(boots, 100 * (1 - alpha / 2)))
+    return float(d.mean()), lo, hi
+
+
 def make_seeds(n: int, base: int) -> list[int]:
     """Generate n deterministic scenario seeds from a base seed."""
     rng = np.random.default_rng(base)
