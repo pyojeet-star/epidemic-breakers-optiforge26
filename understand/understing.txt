@@ -9,3 +9,7 @@ how it give input to the code :
     One circuit breaker for every connection
 The goal of the solution:
      find a suitable threshold for each of the 111 connections.
+what will do in the 5 min the user is in dead mode:
+    If D looks suspicious, the teacher stops C from talking to D for five minutes. This can prevent the rumour from reaching C, B and A.
+what does the algorithm do:
+    After many generations, the computer discovers better thresholds.
