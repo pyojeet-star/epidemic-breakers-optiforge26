@@ -77,6 +77,28 @@ python3 main.py --round2          # Round 2 shift experiment
 `main.py` options: `--runs`, `--pop`, `--gens`, `--train-seeds`,
 `--test-seeds`, `--seed`, `--outdir`.
 
+## Live demo (hosted simulation)
+
+`streamlit_app.py` is an interactive demo: pick a threshold strategy
+(fixed slider, precomputed GA-optimized, or oracle), tweak spread
+probability / cooldown / noise, and watch the epidemic curve plus the
+`F` breakdown — or run a head-to-head comparison on fresh seeds.
+
+Run it locally:
+
+```bash
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
+
+Host it free on Streamlit Community Cloud:
+
+1. Go to [share.streamlit.io](https://share.streamlit.io) and sign in
+   with GitHub.
+2. **New app** → repository `venky29823/epidemic-breakers-optiforge26`,
+   branch `main`, main file path `streamlit_app.py`.
+3. **Deploy** — done. You get a public URL to share.
+
 ## Results (Round 1)
 
 Held-out test seeds, 3 independent runs per method (1,230 evals each).
