@@ -64,6 +64,18 @@ tests/             # pytest: simulator, fitness, GA
 results/           # CSV tables + convergence plot (generated)
 ```
 
+### Domain model (code ↔ problem statement)
+
+| Problem-statement concept | Where it lives in the code |
+|---------------------------|----------------------------|
+| Microservice call graph (epidemic network) | `src/graph_gen.py` — seeded 40-node directed graph; `u→v` means `u` calls `v`, so failures propagate caller-ward like infections |
+| Per-edge circuit-breaker threshold vector θ (111 dims) | `src/ga.py` — the GA individual; one threshold per edge |
+| Cascade dynamics (slow-service infection, breaker trips, cooldown) | `src/simulator.py` — discrete-step epidemic-style spread with breaker state and cooldown timers |
+| Objective F = cascade_size + 2·false_trips + 0.1·latency_penalty | `src/fitness.py` — averaged over held-out scenario seeds |
+| Guided mutation (chokepoint-aware) | `src/ga.py` — mutation targets sampled ∝ edge-betweenness-blended weights |
+| Baselines: fixed-θ, random search, oracle heuristic | `src/baselines.py` — oracle uses hidden per-edge noise, unavailable to any real tuner |
+| Environment shift (Round 2) | `main.py --round2` — higher spread probability, longer breaker cooldown, warm-start adaptation |
+
 ## How to run
 
 ```bash
