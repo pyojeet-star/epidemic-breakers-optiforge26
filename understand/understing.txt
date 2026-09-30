@@ -1,0 +1,6 @@
+how it give input to the code :
+    40 software services
+    111 connections between them
+    One circuit breaker for every connection
+The goal of the solution:
+     find a suitable threshold for each of the 111 connections.
