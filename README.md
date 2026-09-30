@@ -151,11 +151,13 @@ What the numbers actually say:
   print(f"oracle test F = {r['F']:.2f} ± {r['F_std']:.2f}")
   EOF
   ```
-- The ablation is a modest, consistent win: guided beats vanilla on
-  2 of 3 paired runs (34.52 vs 39.31, 33.72 vs 33.49, 31.59 vs 34.24),
-  with ~7% better mean test F and half the run-to-run variance
-  (1.24 vs 2.59). Same budget, same init prior — the only difference is
-  where mutation effort goes.
+- Paired ablation (n=10, same seeds and budget per pair): guided
+  31.61 ± 3.00 vs vanilla 32.88 ± 3.19 vs random-search 34.63 ± 3.47
+  (test F, mean ± sd). Paired diff (vanilla − guided): mean 1.27,
+  sd 2.91, bootstrap 95% CI [−0.35, 3.03]; guided won 5/10 paired runs.
+  The point estimate favors guidance, but the CI includes zero — the
+  guidance effect is not statistically established at n=10. (This
+  supersedes the earlier n=3 pilot, which was likewise inconclusive.)
 - Random search is *stronger than folklore suggests*: with the same
   informed init prior it roughly ties the vanilla GA (35.35 vs 35.68).
   We report it because a strong baseline makes the guided variant's win
@@ -163,6 +165,22 @@ What the numbers actually say:
   quality and consistency, not dramatic sample efficiency.
 
 See `results/round1_results.csv` and `results/convergence.svg`.
+
+### Ablation (paired, n=10)
+
+`python3 main.py --ablation --outdir results` (~60 min). Same train/test
+seeds and evaluation budget per pair; raw per-run values in
+`results/ablation.csv`, summary in `results/ablation_summary.csv`.
+
+| method        | train F | test F (mean ± sd) |
+|---------------|---------|--------------------|
+| random-search | 30.64   | 34.63 ± 3.47       |
+| vanilla GA    | 24.01   | 32.88 ± 3.19       |
+| guided GA     | 23.54   | 31.61 ± 3.00       |
+
+Paired (vanilla − guided) test F: mean 1.27, sd 2.91, bootstrap 95% CI
+[−0.35, 3.03] (positive favors guided); guided won 5/10 paired runs.
+Regenerate with `python3 main.py --ablation --outdir results`.
 
 ## Round 2: hidden shift + surprise constraint
 
@@ -220,6 +238,21 @@ adapts steadily. Both adapted methods beat doing nothing (stale mean
   and edge-removal shift (`--round2-graph-shift`, ~10% of edges). Other
   shift types (new services, correlated noise, weight changes) are
   supported by the code paths but not measured in the report.
+
+## Societal impact (SDG 9)
+
+This work targets **SDG 9: Industry, Innovation & Infrastructure**
+(Target 9.4 — upgrade infrastructure with resilient, resource-efficient
+technologies). Cascading slowdowns are a direct threat to the digital
+infrastructure modern industry runs on; per-edge adaptive
+circuit-breaking is a concrete mechanism for containing them, and the
+Round-2 warm-start result shows tuned defenses can be re-adapted in a
+handful of generations when operating conditions shift, rather than
+rebuilt from scratch. The method itself is deliberately lightweight —
+NumPy and NetworkX only, no accelerators, fully seeded and reproducible —
+so the resilience it offers does not come with heavy compute overhead. We
+make no claim beyond this: a small, honest contribution to infrastructure
+resilience, with all limits documented above.
 
 ## Defense notes (for the judges)
 
