@@ -13,6 +13,7 @@ import streamlit as st
 from src import fitness as fitmod
 from src import graph_gen
 from src import simulator
+from src.baselines import oracle_thresholds
 from src.graph_gen import edge_list
 from src.utils import make_seeds
 
@@ -36,15 +37,6 @@ def get_best_theta(n_edges: int) -> np.ndarray | None:
     return None
 
 
-def oracle_theta(graph, noise_amp: float, spread_p: float) -> np.ndarray:
-    """Theta just above each edge's noise amplitude (unavailable to the GA)."""
-    edges = edge_list(graph)
-    n = graph.number_of_nodes()
-    noise_mat, _ = simulator._per_edge_params(edges, n, noise_amp, spread_p)
-    amps = np.array([noise_mat[u, v] for (u, v) in edges])
-    return np.clip(amps + 0.10, 0.0, 1.0)
-
-
 def build_theta(strategy: str, fixed: float, best: np.ndarray | None,
                 graph, noise_amp: float, spread_p: float, n_edges: int):
     if strategy == "GA-optimized (precomputed)":
@@ -53,7 +45,7 @@ def build_theta(strategy: str, fixed: float, best: np.ndarray | None,
             return np.full(n_edges, 0.5), "fixed-0.5 (fallback)"
         return best, "guided GA"
     if strategy == "Oracle (noise amplitude + 0.1)":
-        return oracle_theta(graph, noise_amp, spread_p), "oracle"
+        return oracle_thresholds(graph, noise_amp, spread_p), "oracle"
     return np.full(n_edges, fixed), f"fixed-{fixed:.2f}"
 
 
@@ -82,6 +74,8 @@ with st.sidebar:
     strategy = st.radio(
         "Strategy",
         ["Fixed (slider)", "GA-optimized (precomputed)", "Oracle (noise amplitude + 0.1)"],
+        help="Oracle: reference heuristic using hidden per-edge noise values "
+             "(θ = clip(noise_amp + 0.10)); not available to any real tuner.",
     )
     fixed_theta = st.slider("Fixed theta", 0.05, 0.95, 0.5, 0.05)
 
@@ -116,7 +110,7 @@ if st.button("Compare on fresh seeds"):
     cmp_seeds = make_seeds(int(n_cmp), base=9000)
     strategies = {
         "fixed-0.5": np.full(N_EDGES, 0.5),
-        "oracle": oracle_theta(G, noise_amp, spread_p),
+        "oracle": oracle_thresholds(G, noise_amp, spread_p),
     }
     if best_theta is not None:
         strategies["guided GA"] = best_theta

@@ -9,6 +9,8 @@ import networkx as nx
 import numpy as np
 
 from . import fitness as fitmod
+from .graph_gen import edge_list
+from .simulator import _per_edge_params  # intra-package use of the env sampler
 
 
 def fixed_threshold(
@@ -70,3 +72,26 @@ def random_search(
         "evals": budget,
         "gens_to_target": None,
     }
+
+
+def oracle_thresholds(
+    graph: nx.DiGraph,
+    noise_amp: float = 0.3,
+    spread_p: float = 0.25,
+    margin: float = 0.10,
+) -> np.ndarray:
+    """Reference heuristic using hidden per-edge noise values.
+
+    The single canonical definition, used by the code, the README, and the
+    demos: ``theta_e = clip(noise_amp_e + margin, 0, 1)`` -- each breaker's
+    threshold is set just above its edge's *true* noise amplitude. Those
+    amplitudes are hidden from every real tuner (the GA, random search, and
+    any fixed threshold), so this is a reference point for how much
+    headroom the noise level leaves -- not a ceiling a method is expected
+    to reach, and not an achievable baseline.
+    """
+    edges = edge_list(graph)
+    n = graph.number_of_nodes()
+    noise_mat, _ = _per_edge_params(edges, n, noise_amp, spread_p)
+    amps = np.array([noise_mat[u, v] for (u, v) in edges])
+    return np.clip(amps + margin, 0.0, 1.0)

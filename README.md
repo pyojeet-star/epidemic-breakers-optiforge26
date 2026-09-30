@@ -114,9 +114,10 @@ Lower F is better.
 What the numbers actually say:
 
 - Both GAs beat the fixed baseline clearly on held-out seeds (~12–18%).
-  The oracle check (`theta ≈ per-edge noise amplitude`, not available to
-  the optimizer) scores ~25.7, so real headroom exists and the GAs capture
-  part of it.
+  The oracle (`theta = clip(noise_amp + 0.10)` per edge — a reference
+  heuristic using hidden noise values, not available to any real tuner)
+  scores 25.69 on the same test seeds, so real headroom exists and the
+  GAs capture part of it.
 - The ablation is a modest, consistent win: guided beats vanilla on
   2 of 3 paired runs (34.52 vs 39.31, 33.72 vs 33.49, 31.59 vs 34.24),
   with ~7% better mean test F and half the run-to-run variance
@@ -159,7 +160,9 @@ adapts steadily. Both adapted methods beat doing nothing (stale mean
 ## Defense notes (for the judges)
 
 - *Why per-edge thresholds?* Edges have different noise/spread profiles;
-  the oracle `theta ≈ noise_amplitude` beats any fixed threshold by ~37%.
+  the oracle (`theta = clip(noise_amp + 0.10)` per edge — a reference
+  heuristic using hidden noise values, unavailable to any real tuner)
+  beats any fixed threshold by ~37% (25.69 vs 40.56 test F).
 - *Why not just grid-search one threshold?* Same reason — one number cannot
   fit 111 different edges.
 - *Isn't this SIR relabeled?* The mapping is deliberate, but false trips,
