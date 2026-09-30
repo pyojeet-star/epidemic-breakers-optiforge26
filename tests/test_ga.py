@@ -71,6 +71,22 @@ def test_edge_weights_align_with_edge_list():
     assert abs(w.sum() - 1.0) < 1e-12
 
 
+def test_betweenness_symmetric_under_reversal():
+    # Edge betweenness is symmetric under graph reversal when keyed by edge
+    # identity: ebc(G)[(u, v)] == ebc(G.reverse())[(v, u)], because
+    # shortest-path counts are preserved under reversal. Guards against
+    # misreading the directed weights as direction-dependent (a positional
+    # comparison of edge_list(G) vs edge_list(G.reverse()) is meaningless:
+    # the two orders differ).
+    import networkx as nx
+
+    G, _ = _tiny()
+    ebc = nx.edge_betweenness_centrality(G)
+    ebc_rev = nx.edge_betweenness_centrality(G.reverse())
+    for (u, v) in edge_list(G):
+        assert abs(ebc[(u, v)] - ebc_rev[(v, u)]) < 1e-12
+
+
 def test_init_population_respects_range():
     G, _ = _tiny()
     pop = ga.init_population(G.number_of_edges(), 20, make_rng(9), lo=0.2, hi=0.7)

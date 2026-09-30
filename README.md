@@ -64,6 +64,18 @@ tests/             # pytest: simulator, fitness, GA
 results/           # CSV tables + convergence plot (generated)
 ```
 
+### Domain model (code ↔ problem statement)
+
+| Problem-statement concept | Where it lives in the code |
+|---------------------------|----------------------------|
+| Microservice call graph (epidemic network) | `src/graph_gen.py` — seeded 40-node directed graph; `u→v` means `u` calls `v`, so failures propagate caller-ward like infections |
+| Per-edge circuit-breaker threshold vector θ (111 dims) | `src/ga.py` — the GA individual; one threshold per edge |
+| Cascade dynamics (slow-service infection, breaker trips, cooldown) | `src/simulator.py` — discrete-step epidemic-style spread with breaker state and cooldown timers |
+| Objective F = cascade_size + 2·false_trips + 0.1·latency_penalty | `src/fitness.py` — averaged over held-out scenario seeds |
+| Guided mutation (chokepoint-aware) | `src/ga.py` — mutation targets sampled ∝ edge-betweenness-blended weights |
+| Baselines: fixed-θ, random search, oracle heuristic | `src/baselines.py` — oracle uses hidden per-edge noise, unavailable to any real tuner |
+| Environment shift (Round 2) | `main.py --round2` — higher spread probability, longer breaker cooldown, warm-start adaptation |
+
 ## How to run
 
 ```bash
@@ -151,11 +163,13 @@ What the numbers actually say:
   print(f"oracle test F = {r['F']:.2f} ± {r['F_std']:.2f}")
   EOF
   ```
-- The ablation is a modest, consistent win: guided beats vanilla on
-  2 of 3 paired runs (34.52 vs 39.31, 33.72 vs 33.49, 31.59 vs 34.24),
-  with ~7% better mean test F and half the run-to-run variance
-  (1.24 vs 2.59). Same budget, same init prior — the only difference is
-  where mutation effort goes.
+- Paired ablation (n=10, same seeds and budget per pair): guided
+  31.61 ± 3.00 vs vanilla 32.88 ± 3.19 vs random-search 34.63 ± 3.47
+  (test F, mean ± sd). Paired diff (vanilla − guided): mean 1.27,
+  sd 2.91, bootstrap 95% CI [−0.35, 3.03]; guided won 5/10 paired runs.
+  The point estimate favors guidance, but the CI includes zero — the
+  guidance effect is not statistically established at n=10. (This
+  supersedes the earlier n=3 pilot, which was likewise inconclusive.)
 - Random search is *stronger than folklore suggests*: with the same
   informed init prior it roughly ties the vanilla GA (35.35 vs 35.68).
   We report it because a strong baseline makes the guided variant's win
@@ -164,7 +178,23 @@ What the numbers actually say:
 
 See `results/round1_results.csv` and `results/convergence.svg`.
 
-## Round 2: hidden shift + surprise constraint
+### Ablation (paired, n=10)
+
+`python3 main.py --ablation --outdir results` (~60 min). Same train/test
+seeds and evaluation budget per pair; raw per-run values in
+`results/ablation.csv`, summary in `results/ablation_summary.csv`.
+
+| method        | train F | test F (mean ± sd) |
+|---------------|---------|--------------------|
+| random-search | 30.64   | 34.63 ± 3.47       |
+| vanilla GA    | 24.01   | 32.88 ± 3.19       |
+| guided GA     | 23.54   | 31.61 ± 3.00       |
+
+Paired (vanilla − guided) test F: mean 1.27, sd 2.91, bootstrap 95% CI
+[−0.35, 3.03] (positive favors guided); guided won 5/10 paired runs.
+Regenerate with `python3 main.py --ablation --outdir results`.
+
+## Round 2: hidden shift
 
 `python3 main.py --round2` hardens the environment: spread probability
 0.25 → 0.45 and breaker cooldown 5 → 12 steps. It then compares, on
@@ -184,8 +214,8 @@ Round 2 test seeds (2 reps, 20 adaptation generations each):
 
 Reading: warm-start recovered past the stale baseline on **both** reps
 (5 and 7 generations); restart-from-scratch recovered on only one rep and
-failed outright on the other. The warm-start advantage is *reliability*
-of recovery, not final quality — it pays a small upfront cost from the
+failed outright on the other. On these two reps the warm-start advantage is
+steadier recovery rather than final quality — it pays a small upfront cost from the
 diversity noise (see the early part of `results/recovery.svg`) and then
 adapts steadily. Both adapted methods beat doing nothing (stale mean
 37.80). Raw curves: `results/round2_curves.csv`.
@@ -221,6 +251,21 @@ adapts steadily. Both adapted methods beat doing nothing (stale mean
   shift types (new services, correlated noise, weight changes) are
   supported by the code paths but not measured in the report.
 
+## Societal impact (SDG 9)
+
+This work targets **SDG 9: Industry, Innovation & Infrastructure**
+(Target 9.4 — upgrade infrastructure with resilient, resource-efficient
+technologies). Cascading slowdowns are a direct threat to the digital
+infrastructure modern industry runs on; per-edge adaptive
+circuit-breaking is a concrete mechanism for containing them, and the
+Round-2 warm-start result shows tuned defenses can be re-adapted in a
+handful of generations when operating conditions shift, rather than
+rebuilt from scratch. The method itself is deliberately lightweight —
+NumPy and NetworkX only, no accelerators, fully seeded and reproducible —
+so the resilience it offers does not come with heavy compute overhead. We
+make no claim beyond this: a small, honest contribution to infrastructure
+resilience, with all limits documented above.
+
 ## Defense notes (for the judges)
 
 - *Why per-edge thresholds?* Edges have different noise/spread profiles;
@@ -240,8 +285,11 @@ adapts steadily. Both adapted methods beat doing nothing (stale mean
 - *Why the GA, if random search ties vanilla?* Because the comparison is
   the point: with an informed prior, random search *is* strong, and the
   vanilla GA barely beats it. The contribution is the guided operator,
-  which beats both consistently at the same budget. A weak baseline would
+  which has a positive point estimate against both at the same budget —
+  but with n=10 the paired 95% CI ([−0.35, 3.03]) includes zero, so the
+  guidance effect is not statistically established. A weak baseline would
   have hidden that.
 - *Round 2?* Warm-start recovered past the stale baseline in 5 and 7
   generations on both reps; restart-from-scratch failed on one rep.
-  Adaptation reliability under shift, measured — not claimed.
+  Suggestive of steadier recovery under shift — not a reliability claim
+  (n=2).
