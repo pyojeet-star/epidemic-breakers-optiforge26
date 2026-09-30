@@ -194,7 +194,7 @@ Paired (vanilla − guided) test F: mean 1.27, sd 2.91, bootstrap 95% CI
 [−0.35, 3.03] (positive favors guided); guided won 5/10 paired runs.
 Regenerate with `python3 main.py --ablation --outdir results`.
 
-## Round 2: hidden shift + surprise constraint
+## Round 2: hidden shift
 
 `python3 main.py --round2` hardens the environment: spread probability
 0.25 → 0.45 and breaker cooldown 5 → 12 steps. It then compares, on
@@ -214,8 +214,8 @@ Round 2 test seeds (2 reps, 20 adaptation generations each):
 
 Reading: warm-start recovered past the stale baseline on **both** reps
 (5 and 7 generations); restart-from-scratch recovered on only one rep and
-failed outright on the other. The warm-start advantage is *reliability*
-of recovery, not final quality — it pays a small upfront cost from the
+failed outright on the other. On these two reps the warm-start advantage is
+steadier recovery rather than final quality — it pays a small upfront cost from the
 diversity noise (see the early part of `results/recovery.svg`) and then
 adapts steadily. Both adapted methods beat doing nothing (stale mean
 37.80). Raw curves: `results/round2_curves.csv`.
@@ -285,8 +285,11 @@ resilience, with all limits documented above.
 - *Why the GA, if random search ties vanilla?* Because the comparison is
   the point: with an informed prior, random search *is* strong, and the
   vanilla GA barely beats it. The contribution is the guided operator,
-  which beats both consistently at the same budget. A weak baseline would
+  which has a positive point estimate against both at the same budget —
+  but with n=10 the paired 95% CI ([−0.35, 3.03]) includes zero, so the
+  guidance effect is not statistically established. A weak baseline would
   have hidden that.
 - *Round 2?* Warm-start recovered past the stale baseline in 5 and 7
   generations on both reps; restart-from-scratch failed on one rep.
-  Adaptation reliability under shift, measured — not claimed.
+  Suggestive of steadier recovery under shift — not a reliability claim
+  (n=2).
