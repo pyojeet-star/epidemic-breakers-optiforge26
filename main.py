@@ -38,7 +38,8 @@ ROUND2_KW = dict(spread_p=0.45, cooldown=12, n_steps=40)
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Epidemic Breakers - OptiForge 2026")
-    p.add_argument("--runs", type=int, default=3, help="independent runs per method")
+    p.add_argument("--runs", type=int, default=None,
+                   help="independent runs per method (default 3; 10 with --ablation)")
     p.add_argument("--train-seeds", type=int, default=24)
     p.add_argument("--test-seeds", type=int, default=12)
     p.add_argument("--pop", type=int, default=30, help="GA population size")
@@ -384,7 +385,11 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.quick:  # tiny budgets for smoke tests
         args.pop, args.gens = 8, 6
-        args.train_seeds, args.test_seeds, args.runs = 4, 4, 2
+        args.train_seeds, args.test_seeds = 4, 4
+        if args.runs is None:
+            args.runs = 2
+    if args.runs is None:
+        args.runs = 10 if args.ablation else 3
     if args.ablation:
         run_ablation(args)
     elif args.round2:
