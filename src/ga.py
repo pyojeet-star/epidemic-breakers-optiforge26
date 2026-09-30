@@ -73,6 +73,40 @@ def init_population(
     return rng.uniform(lo, hi, size=(pop_size, n_edges))
 
 
+def remap_population(
+    old_pop: np.ndarray,
+    old_edges: list[tuple[int, int]],
+    new_graph: nx.DiGraph,
+    rng: np.random.Generator,
+    init_lo: float = 0.2,
+    init_hi: float = 0.7,
+) -> np.ndarray:
+    """Remap a saved population onto a new graph's edge set.
+
+    Thresholds follow edge *identity*: an edge ``(u, v)`` that still exists
+    keeps its learned threshold column. Edges added by the shift are
+    initialised from the shared init prior ``U[init_lo, init_hi]``;
+    removed edges are dropped. Returns an array in
+    ``[0, 1]^(pop_size x E_new)`` aligned with ``edge_list(new_graph)``.
+    """
+    old_pop = np.asarray(old_pop, dtype=float)
+    if old_pop.ndim != 2 or old_pop.shape[1] != len(old_edges):
+        raise ValueError(
+            f"old_pop has shape {old_pop.shape} but old_edges has "
+            f"{len(old_edges)} edges"
+        )
+    new_edges = edge_list(new_graph)
+    old_index = {e: i for i, e in enumerate(old_edges)}
+    pop_size = old_pop.shape[0]
+    new_pop = np.empty((pop_size, len(new_edges)), dtype=float)
+    for j, e in enumerate(new_edges):
+        if e in old_index:
+            new_pop[:, j] = old_pop[:, old_index[e]]
+        else:
+            new_pop[:, j] = rng.uniform(init_lo, init_hi, size=pop_size)
+    return np.clip(new_pop, 0.0, 1.0)
+
+
 def tournament_select(
     pop: np.ndarray, fitnesses: np.ndarray, k: int, rng: np.random.Generator
 ) -> np.ndarray:
@@ -123,32 +157,51 @@ def run_ga(
     config: GAConfig,
     rng: np.random.Generator,
     init_pop: np.ndarray | None = None,
+    init_edges: list[tuple[int, int]] | None = None,
     mutation_boost: float = 1.0,
     boost_gens: int = 0,
     target_score: float | None = None,
+    w_false_trips: float = fitmod.W_FALSE_TRIPS,
+    w_latency: float = fitmod.W_LATENCY,
     **sim_kwargs,
 ) -> dict:
     """Run the GA. Returns best individual, history, and warm-start state.
 
-    ``init_pop`` warm-starts from a previous population (same shape required).
+    ``init_pop`` warm-starts from a previous population. If ``init_edges``
+    (the edge list the population was trained on) is given and differs
+    from the current graph's edges -- e.g. a hidden shift added or removed
+    edges -- the population is remapped by edge identity via
+    :func:`remap_population` instead of raising. Without ``init_edges`` a
+    shape mismatch still raises, since silent truncation would hide bugs.
+
     ``mutation_boost`` multiplies the mutation rate for the first
     ``boost_gens`` generations. ``target_score`` records the first generation
     whose best train F reaches it (generations-to-target).
+    ``w_false_trips`` / ``w_latency`` reweight the objective.
     """
     n_edges = graph.number_of_edges()
     weights = edge_weights(graph) if config.mutation_mode == "guided" else None
 
     if init_pop is not None:
-        if init_pop.shape != (config.pop_size, n_edges):
-            raise ValueError("init_pop has wrong shape for warm start")
-        pop = np.clip(init_pop.copy(), 0.0, 1.0)
+        if init_edges is not None and list(init_edges) != edge_list(graph):
+            pop = remap_population(init_pop, list(init_edges), graph, rng,
+                                   config.init_lo, config.init_hi)
+        elif np.shape(init_pop) != (config.pop_size, n_edges):
+            raise ValueError(
+                "init_pop has wrong shape for warm start; pass init_edges "
+                "to remap a population across a graph shift"
+            )
+        else:
+            pop = np.clip(np.asarray(init_pop, dtype=float).copy(), 0.0, 1.0)
     else:
         pop = init_population(n_edges, config.pop_size, rng,
                               config.init_lo, config.init_hi)
 
     def batch_fitness(p: np.ndarray) -> np.ndarray:
         return np.array(
-            [fitmod.evaluate(graph, ind, train_seeds, **sim_kwargs)["F"] for ind in p]
+            [fitmod.evaluate(graph, ind, train_seeds,
+                             w_false_trips=w_false_trips, w_latency=w_latency,
+                             **sim_kwargs)["F"] for ind in p]
         )
 
     fitnesses = batch_fitness(pop)

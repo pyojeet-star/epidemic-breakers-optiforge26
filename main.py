@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--outdir", type=str, default="results")
     p.add_argument("--quick", action="store_true", help="tiny budgets for smoke tests")
     p.add_argument("--round2", action="store_true", help="run the Round 2 shift experiment")
+    p.add_argument("--round2-graph-shift", action="store_true",
+                   help="also remove ~10% of edges in the Round 2 shift")
     return p
 
 
@@ -141,11 +143,29 @@ def run_round2(args) -> list[dict]:
     recover past the stale (non-adapted) Round 1 thresholds, measured on
     Round 2 test seeds. Warm-start = Round 1 final population + diversity
     noise + temporary mutation boost; scratch = fresh population.
+
+    With ``--round2-graph-shift`` the shift additionally removes ~10% of
+    edges; thresholds then follow edge identity (surviving edges keep their
+    values, removed edges are dropped) via :func:`ga.remap_population`.
     """
     G = graph_gen.generate_service_graph(n_nodes=40, seed=7)
     train_seeds = make_seeds(args.train_seeds, base=1000)
     test_seeds = make_seeds(args.test_seeds, base=2000)
     assert not set(train_seeds) & set(test_seeds)
+
+    old_edges = graph_gen.edge_list(G)
+    if args.round2_graph_shift:
+        grng = make_rng(args.seed + 999)
+        G2 = G.copy()
+        n_remove = max(1, int(round(0.10 * len(old_edges))))
+        drop = grng.choice(len(old_edges), size=n_remove, replace=False)
+        for i in sorted(drop, reverse=True):
+            G2.remove_edge(*old_edges[i])
+        log.info("graph shift: removed %d/%d edges (%.0f%%)",
+                 n_remove, len(old_edges), 100 * n_remove / len(old_edges))
+        G_adapt, shift_tag = G2, f"edges-{n_remove}-removed"
+    else:
+        G_adapt, shift_tag = G, "none"
 
     adapt_gens = max(10, args.gens // 2)
     n_reps = 2
@@ -161,7 +181,15 @@ def run_round2(args) -> list[dict]:
                            mutation_mode="guided"),
             make_rng(args.seed + rep), **ROUND1_KW,
         )
-        stale = fitmod.evaluate(G, r1["best"], test_seeds, **ROUND2_KW)
+        # stale: Round 1 thresholds deployed as-is (remapped by edge
+        # identity when the graph shift removed edges)
+        wrng = make_rng(args.seed + 100 + rep)
+        if args.round2_graph_shift:
+            stale_theta = gamod.remap_population(
+                r1["best"].reshape(1, -1), old_edges, G_adapt, wrng)[0]
+        else:
+            stale_theta = r1["best"]
+        stale = fitmod.evaluate(G_adapt, stale_theta, test_seeds, **ROUND2_KW)
         stale_fs.append(stale["F"])
         log.info("rep %d: Round 1 train F=%.3f; stale in Round 2: test F=%.3f",
                  rep, r1["best_F"], stale["F"])
@@ -171,25 +199,28 @@ def run_round2(args) -> list[dict]:
 
         adapt_cfg = gamod.GAConfig(pop_size=args.pop, generations=adapt_gens,
                                    mutation_mode="guided")
-        # warm start: previous population + diversity injection + boost
-        wrng = make_rng(args.seed + 100 + rep)
+        # warm start: previous population (remapped across a graph shift) +
+        # diversity injection + boost
+        base = (gamod.remap_population(r1["final_pop"], old_edges, G_adapt, wrng)
+                if args.round2_graph_shift else r1["final_pop"])
         init = np.clip(
-            r1["final_pop"] + wrng.normal(0.0, 0.08, r1["final_pop"].shape),
+            base + wrng.normal(0.0, 0.08, base.shape),
             0.0, 1.0,
         )
-        warm = gamod.run_ga(G, train_seeds, adapt_cfg, wrng, init_pop=init,
+        warm = gamod.run_ga(G_adapt, train_seeds, adapt_cfg, wrng, init_pop=init,
                             mutation_boost=3.0, boost_gens=10, **ROUND2_KW)
-        scratch = gamod.run_ga(G, train_seeds, adapt_cfg,
+        scratch = gamod.run_ga(G_adapt, train_seeds, adapt_cfg,
                                make_rng(args.seed + 200 + rep), **ROUND2_KW)
 
         for name, res in (("warm-start", warm), ("from-scratch", scratch)):
-            test_curve = [fitmod.evaluate(G, ind, test_seeds, **ROUND2_KW)["F"]
+            test_curve = [fitmod.evaluate(G_adapt, ind, test_seeds, **ROUND2_KW)["F"]
                           for ind in res["best_per_gen"]]
             curves[name].append(test_curve)
             rec = next((g for g, f in enumerate(test_curve) if f <= stale["F"]),
                        None)
             rows.append({
                 "method": name, "rep": rep,
+                "graph_shift": shift_tag,
                 "final_test_F": round(test_curve[-1], 3),
                 "stale_test_F": round(stale["F"], 3),
                 "gens_to_recover": rec if rec is not None else "-",
@@ -202,6 +233,8 @@ def run_round2(args) -> list[dict]:
     mean_stale = float(np.mean(stale_fs))
 
     print("\nROUND 2 RECOVERY (shifted env; lower test F is better)")
+    if args.round2_graph_shift:
+        print(f"graph shift: {shift_tag}")
     print("-" * 70)
     print(f"{'method':<14}{'rep':<5}{'final test F':<14}{'stale F':<10}{'gens_to_recover'}")
     print("-" * 70)
