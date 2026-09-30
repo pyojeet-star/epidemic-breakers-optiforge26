@@ -1,0 +1,5 @@
+method,rep,final_test_F,stale_test_F,gens_to_recover,evals
+warm-start,0,46.863,38.2,-,88
+from-scratch,0,43.097,38.2,-,88
+warm-start,1,46.612,44.985,-,88
+from-scratch,1,46.31,44.985,-,88

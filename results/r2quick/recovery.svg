@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="420">
+<rect width="680" height="420" fill="white"/>
+<text x="340.0" y="22" text-anchor="middle" font-size="15" font-family="sans-serif">Round 2 recovery (test F per adaptation generation)</text>
+<text x="20" y="202.5" text-anchor="middle" font-size="12" font-family="sans-serif" transform="rotate(-90 20 202.5)">test F (lower is better)</text>
+<text x="365.0" y="408" text-anchor="middle" font-size="12" font-family="sans-serif">adaptation generation</text>
+<line x1="70" y1="365.0" x2="660" y2="365.0" stroke="#e0e0e0"/><text x="62" y="369.0" text-anchor="end" font-size="10" font-family="sans-serif">44.30</text>
+<line x1="70" y1="283.75" x2="660" y2="283.75" stroke="#e0e0e0"/><text x="62" y="287.75" text-anchor="end" font-size="10" font-family="sans-serif">45.67</text>
+<line x1="70" y1="202.5" x2="660" y2="202.5" stroke="#e0e0e0"/><text x="62" y="206.5" text-anchor="end" font-size="10" font-family="sans-serif">47.04</text>
+<line x1="70" y1="121.25" x2="660" y2="121.25" stroke="#e0e0e0"/><text x="62" y="125.25" text-anchor="end" font-size="10" font-family="sans-serif">48.41</text>
+<line x1="70" y1="40.0" x2="660" y2="40.0" stroke="#e0e0e0"/><text x="62" y="44.0" text-anchor="end" font-size="10" font-family="sans-serif">49.77</text>
+<polyline points="70.0,121.2 129.0,198.5 188.0,220.1 247.0,220.1 306.0,96.9 365.0,96.9 424.0,62.4 483.0,84.6 542.0,84.6 601.0,105.4 660.0,220.3" fill="none" stroke="#1f77b4" stroke-width="2"/>
+<rect x="78" y="12" width="12" height="12" fill="#1f77b4"/><text x="94" y="22" font-size="12" font-family="sans-serif">warm-start</text>
+<polyline points="70.0,276.0 129.0,276.0 188.0,252.4 247.0,300.8 306.0,318.6 365.0,318.6 424.0,322.2 483.0,342.6 542.0,336.2 601.0,325.0 660.0,341.1" fill="none" stroke="#d62728" stroke-width="2"/>
+<rect x="228" y="12" width="12" height="12" fill="#d62728"/><text x="244" y="22" font-size="12" font-family="sans-serif">from-scratch</text>
+</svg>

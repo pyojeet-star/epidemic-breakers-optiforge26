@@ -1,0 +1,197 @@
+"""Genetic algorithm over circuit-breaker thresholds.
+
+Individual: real vector theta in [0, 1]^E (one threshold per graph edge).
+Minimises train fitness F.
+
+Two mutation modes:
+  * "uniform" - mutated genes chosen uniformly at random (vanilla GA);
+  * "guided"  - mutated genes chosen with probability proportional to edge
+                betweenness centrality (immunisation-inspired: protect the
+                super-spreader edges first).
+
+Supports warm-starting from a previous population and a temporary
+mutation-rate boost (used for Round 2 re-adaptation).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import networkx as nx
+import numpy as np
+
+from . import fitness as fitmod
+from .graph_gen import edge_list
+
+
+@dataclass
+class GAConfig:
+    pop_size: int = 30
+    generations: int = 40
+    tournament_k: int = 3
+    crossover_rate: float = 0.9
+    mutation_rate: float = 0.05
+    mutation_sigma: float = 0.08
+    elitism: int = 2
+    mutation_mode: str = "uniform"  # "uniform" | "guided"
+    init_lo: float = 0.2
+    init_hi: float = 0.7
+
+
+def edge_weights(graph: nx.DiGraph, uniform_blend: float = 0.5) -> np.ndarray:
+    """Per-edge mutation weights: betweenness blended with uniform.
+
+    Pure betweenness weights starve low-betweenness edges of mutations, so
+    their thresholds never get tuned. Blending with uniform
+    (``uniform_blend=0.5``) biases search toward structurally important
+    edges without abandoning the rest. Aligned with ``edge_list(graph)``
+    order; falls back to uniform if every betweenness value is zero.
+    """
+    edges = edge_list(graph)
+    btw = nx.edge_betweenness_centrality(graph)
+    w = np.array([btw.get(e, 0.0) for e in edges], dtype=float)
+    if w.sum() <= 0:
+        w = np.ones_like(w)
+    w = w / w.sum()
+    u = np.ones_like(w) / len(w)
+    return (1.0 - uniform_blend) * w + uniform_blend * u
+
+
+def init_population(
+    n_edges: int,
+    pop_size: int,
+    rng: np.random.Generator,
+    lo: float = 0.2,
+    hi: float = 0.7,
+) -> np.ndarray:
+    """Initial population, uniform in [lo, hi].
+
+    Informed prior, not a trick: thresholds below the noise floor (~0.3 max
+    per-edge amplitude) false-trip constantly, and thresholds near 1.0 react
+    too slowly to matter. Useful thresholds live in the mid-range, so that
+    is where search starts. Both GA variants and random search share it.
+    """
+    return rng.uniform(lo, hi, size=(pop_size, n_edges))
+
+
+def tournament_select(
+    pop: np.ndarray, fitnesses: np.ndarray, k: int, rng: np.random.Generator
+) -> np.ndarray:
+    """Pick the best (lowest F) of k random individuals."""
+    idx = rng.choice(len(pop), size=k, replace=False)
+    return pop[idx[np.argmin(fitnesses[idx])]].copy()
+
+
+def uniform_crossover(
+    p1: np.ndarray, p2: np.ndarray, rate: float, rng: np.random.Generator
+) -> np.ndarray:
+    """Per-gene uniform crossover with probability ``rate``."""
+    if rng.random() < rate:
+        mask = rng.random(len(p1)) < 0.5
+        return np.where(mask, p1, p2)
+    return p1.copy()
+
+
+def mutate(
+    ind: np.ndarray,
+    rng: np.random.Generator,
+    rate: float,
+    sigma: float,
+    mode: str,
+    weights: np.ndarray | None,
+) -> np.ndarray:
+    """Gaussian mutation, clipped to [0, 1].
+
+    Uniform mode mutates each gene independently with probability ``rate``.
+    Guided mode mutates ``Binomial(n, rate)`` genes chosen with probability
+    proportional to ``weights`` (edge betweenness).
+    """
+    child = ind.copy()
+    n = len(ind)
+    if mode == "guided" and weights is not None:
+        k = int(rng.binomial(n, rate))
+        idx = rng.choice(n, size=min(max(k, 1), n), replace=False, p=weights)
+    else:
+        idx = np.flatnonzero(rng.random(n) < rate)
+    if len(idx):
+        child[idx] += rng.normal(0.0, sigma, size=len(idx))
+    return np.clip(child, 0.0, 1.0)
+
+
+def run_ga(
+    graph: nx.DiGraph,
+    train_seeds: list[int],
+    config: GAConfig,
+    rng: np.random.Generator,
+    init_pop: np.ndarray | None = None,
+    mutation_boost: float = 1.0,
+    boost_gens: int = 0,
+    target_score: float | None = None,
+    **sim_kwargs,
+) -> dict:
+    """Run the GA. Returns best individual, history, and warm-start state.
+
+    ``init_pop`` warm-starts from a previous population (same shape required).
+    ``mutation_boost`` multiplies the mutation rate for the first
+    ``boost_gens`` generations. ``target_score`` records the first generation
+    whose best train F reaches it (generations-to-target).
+    """
+    n_edges = graph.number_of_edges()
+    weights = edge_weights(graph) if config.mutation_mode == "guided" else None
+
+    if init_pop is not None:
+        if init_pop.shape != (config.pop_size, n_edges):
+            raise ValueError("init_pop has wrong shape for warm start")
+        pop = np.clip(init_pop.copy(), 0.0, 1.0)
+    else:
+        pop = init_population(n_edges, config.pop_size, rng,
+                              config.init_lo, config.init_hi)
+
+    def batch_fitness(p: np.ndarray) -> np.ndarray:
+        return np.array(
+            [fitmod.evaluate(graph, ind, train_seeds, **sim_kwargs)["F"] for ind in p]
+        )
+
+    fitnesses = batch_fitness(pop)
+    evals = len(pop)
+    best_idx = int(np.argmin(fitnesses))
+    best, best_f = pop[best_idx].copy(), float(fitnesses[best_idx])
+    history = [best_f]
+    best_per_gen = [best.copy()]  # running best individual after each generation
+    gens_to_target = 0 if target_score is not None and best_f <= target_score else None
+
+    for g in range(config.generations):
+        rate = config.mutation_rate * (mutation_boost if g < boost_gens else 1.0)
+        order = np.argsort(fitnesses)
+        new_pop = [pop[i].copy() for i in order[: config.elitism]]
+        while len(new_pop) < config.pop_size:
+            p1 = tournament_select(pop, fitnesses, config.tournament_k, rng)
+            p2 = tournament_select(pop, fitnesses, config.tournament_k, rng)
+            child = uniform_crossover(p1, p2, config.crossover_rate, rng)
+            child = mutate(child, rng, rate, config.mutation_sigma,
+                           config.mutation_mode, weights)
+            new_pop.append(child)
+        pop = np.array(new_pop)
+        fitnesses = batch_fitness(pop)
+        evals += len(pop)
+        gen_best = float(fitnesses.min())
+        if gen_best < best_f:
+            best_f = gen_best
+            best = pop[int(np.argmin(fitnesses))].copy()
+        history.append(best_f)
+        best_per_gen.append(best.copy())
+        if (
+            target_score is not None
+            and gens_to_target is None
+            and best_f <= target_score
+        ):
+            gens_to_target = g + 1
+
+    return {
+        "best": best,
+        "best_F": best_f,
+        "history": history,
+        "best_per_gen": best_per_gen,
+        "gens_to_target": gens_to_target,
+        "final_pop": pop.copy(),
+        "evals": evals,
+    }
