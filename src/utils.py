@@ -12,7 +12,7 @@ import numpy as np
 def make_rng(seed: int) -> np.random.Generator:
     """Create a seeded numpy random generator (no global state)."""
     return np.random.default_rng(seed)
-
+#dsoigso;hg
 
 def make_seeds(n: int, base: int) -> list[int]:
     """Generate n deterministic scenario seeds from a base seed."""
