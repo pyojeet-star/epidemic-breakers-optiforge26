@@ -1,7 +1,7 @@
 to be change:
-        false trips = breakers that opened when there was no real problem(solve it)
-
-
+        ->false trips = breakers that opened when there was no real problem(solve it)
+            - Lower F means a better solution
+        ->
 
 how it give input to the code :
     40 software services
