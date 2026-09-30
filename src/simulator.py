@@ -74,6 +74,7 @@ def _run(
     cooldown: int,
     n_steps: int,
     ema_alpha: float,
+    record_history: bool = False,
 ) -> dict:
     n = A.shape[0]
     rng = np.random.default_rng(seed)
@@ -89,6 +90,7 @@ def _run(
     false_trips = 0
     open_edge_steps = 0
     n_edges = int(A.sum())
+    slow_history: list[int] = []
 
     for _ in range(n_steps):
         # 1. spread along closed edges: callers of slow callees, per-edge p
@@ -109,16 +111,21 @@ def _run(
         # 4. account open time, then tick timers down
         open_edge_steps += int(np.sum(open_timer > 0))
         open_timer[open_timer > 0] -= 1
+        if record_history:
+            slow_history.append(int(slow.sum()))
 
     cascade_size = int(slow.sum())
     latency_penalty = 100.0 * open_edge_steps / max(1, n_edges * n_steps)
-    return {
+    out = {
         "cascade_size": cascade_size,
         "false_trips": false_trips,
         "latency_penalty": float(latency_penalty),
         "n_steps": n_steps,
         "n_edges": n_edges,
     }
+    if record_history:
+        out["slow_history"] = slow_history
+    return out
 
 
 def _prepare(graph: nx.DiGraph, theta, noise_amp: float, spread_p: float,
@@ -151,13 +158,18 @@ def simulate(
     noise_amp: float = 0.3,
     ema_alpha: float = 0.3,
     heterogeneous: bool = True,
+    record_history: bool = False,
 ) -> dict:
-    """Run one failure scenario. ``theta`` has one value per graph edge."""
+    """Run one failure scenario. ``theta`` has one value per graph edge.
+
+    With ``record_history=True`` the returned dict also carries
+    ``slow_history``: the number of slow services after each step.
+    """
     A, edges, theta, noise_mat, p_mat = _prepare(
         graph, theta, noise_amp, spread_p, heterogeneous
     )
     return _run(A, edges, theta, noise_mat, p_mat, seed,
-                cooldown, n_steps, ema_alpha)
+                cooldown, n_steps, ema_alpha, record_history)
 
 
 def simulate_many(

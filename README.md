@@ -68,14 +68,56 @@ results/           # CSV tables + convergence plot (generated)
 
 ```bash
 pip install -r requirements.txt   # numpy, networkx, pytest
-pytest tests/ -q                  # 20 tests
+pytest tests/ -q                  # 27 tests
 python3 main.py                   # full comparison (~20 min, 3 runs/method)
+python3 main.py --ablation        # paired ablation, 10 runs/method (~60 min)
 python3 main.py --quick           # smoke test (~15 s)
 python3 main.py --round2          # Round 2 shift experiment
 ```
 
 `main.py` options: `--runs`, `--pop`, `--gens`, `--train-seeds`,
 `--test-seeds`, `--seed`, `--outdir`.
+
+## Demo
+
+Two demos, different trade-offs:
+
+- **Static site** (recommended for sharing):
+  <https://venky29823.github.io/epidemic-breakers-web/> — zero-dependency
+  HTML/CSS/vanilla-JS in the
+  [epidemic-breakers-web](https://github.com/venky29823/epidemic-breakers-web)
+  repo. It **re-implements the simulator in JavaScript** (`sim.js`: cascade
+  dynamics, fitness, edge betweenness, and a small in-browser GA) and bakes
+  in **precomputed data exported from this repo** — the exact 40-node /
+  111-edge graph, its per-edge noise/spread parameters, and the
+  GA-optimized thresholds (`data/*.json`). `scripts/check_web_parity.py`
+  verifies the baked-in constants agree with the Python source of truth
+  (graph size, edge identity/order, per-edge params, best_theta, sim
+  defaults); known differences are documented in that script's output
+  (JS vs numpy RNG streams differ, so single-scenario trajectories differ —
+  parity is statistical).
+- **Streamlit app** (`streamlit_app.py` in this repo): the same simulator
+  running live in Python. Run locally with
+  `pip install -r requirements.txt && streamlit run streamlit_app.py`,
+  or host free on [Streamlit Community Cloud](https://share.streamlit.io)
+  (repo `venky29823/epidemic-breakers-optiforge26`, branch `main`, main
+  file `streamlit_app.py`).
+
+> **Note for the website repo** (`epidemic-breakers-web`, updated
+> separately — do not edit it from here): its oracle wording still calls
+> the oracle an "information-theoretic ceiling". To match the canonical
+> definition used in this repo, change these exact strings in
+> `epidemic-breakers-web/index.html`:
+>
+> 1. `Oracle (noise&nbsp;+&nbsp;0.1)` → `Oracle reference (hidden noise + 0.10)`
+> 2. `Oracle: θ set just above each edge's true noise amplitude — the information-theoretic ceiling, unavailable to any real tuner.`
+>    →
+>    `Oracle reference: θ_e = clip(noise_amp_e + 0.10, 0, 1), a heuristic using hidden per-edge noise values. It is not available to any real tuner and is not a ceiling.`
+
+Pick a threshold strategy (fixed slider, precomputed GA-optimized, or the
+oracle reference), tweak spread probability / cooldown / noise, and watch
+the epidemic curve plus the `F` breakdown — or run a head-to-head
+comparison on fresh seeds.
 
 ## Results (Round 1)
 
@@ -92,9 +134,23 @@ Lower F is better.
 What the numbers actually say:
 
 - Both GAs beat the fixed baseline clearly on held-out seeds (~12–18%).
-  The oracle check (`theta ≈ per-edge noise amplitude`, not available to
-  the optimizer) scores ~25.7, so real headroom exists and the GAs capture
-  part of it.
+  The oracle (`theta = clip(noise_amp + 0.10)` per edge — a reference
+  heuristic using hidden noise values, not available to any real tuner)
+  scores 24.74 ± 10.48 (mean ± sd over the 24 test scenarios) on the same
+  test seeds, so real headroom exists and the
+  GAs capture part of it. Reproduce it exactly with:
+
+  ```bash
+  python3 - <<'EOF'
+  from src import graph_gen, baselines as bl, fitness as fit
+  from src.utils import make_seeds
+  from main import ROUND1_KW
+  G = graph_gen.generate_service_graph(n_nodes=40, seed=7)
+  theta = bl.oracle_thresholds(G)  # canonical: clip(noise_amp + 0.10)
+  r = fit.evaluate(G, theta, make_seeds(24, base=2000), **ROUND1_KW)
+  print(f"oracle test F = {r['F']:.2f} ± {r['F_std']:.2f}")
+  EOF
+  ```
 - The ablation is a modest, consistent win: guided beats vanilla on
   2 of 3 paired runs (34.52 vs 39.31, 33.72 vs 33.49, 31.59 vs 34.24),
   with ~7% better mean test F and half the run-to-run variance
@@ -134,10 +190,46 @@ diversity noise (see the early part of `results/recovery.svg`) and then
 adapts steadily. Both adapted methods beat doing nothing (stale mean
 37.80). Raw curves: `results/round2_curves.csv`.
 
+## Known limitations
+
+- **Small n for Round 2**: 2 reps. The recovery-speed claim is about
+  reliability across the reps we ran, not a tight estimate — treat the
+  5/7-generation figures as indicative.
+- **Train/test gap**: real and reported (train ~21, test ~33 for the
+  guided GA). Part overfitting to 24 train seeds, part irreducible
+  scenario variance (test-F std ~10 even for the oracle). The
+  `--ablation` train/test diagnostic in `results/ablation.csv` separates
+  the two per method.
+- **Oracle is a heuristic**: `theta = clip(noise_amp + 0.10)` uses hidden
+  per-edge noise values no real tuner can see. It marks headroom, not a
+  ceiling — a method beating it would not be a contradiction. The +0.10
+  margin itself is arbitrary: margin 0 scores 23.15 ± 9.72, slightly
+  better than the canonical +0.10 (24.74 ± 10.48) on the same 24 test
+  seeds. Don't over-interpret the exact margin.
+- **Round-1 table provenance**: the table's figures (incl. fixed-0.5 =
+  40.56) come from the original full run, whose per-run CSVs were
+  overwritten by `--quick` smoke runs before the initial commit and are
+  no longer in the repo. Re-evaluating fixed-0.5 today on the documented
+  24 test seeds (base 2000) gives 37.70 ± 11.29, so the original run's
+  exact seed/code setup is not fully recoverable — treat 40.56 as that
+  run's reported figure, and use the same-seed re-evaluations
+  (37.70 ± 11.29 vs oracle 24.74 ± 10.48) for apples-to-apples claims.
+  `python3 main.py --outdir results` regenerates the table from scratch
+  (~20 min, deterministic seeds).
+- **Shifts tested**: environment shift (spread 0.25→0.45, cooldown 5→12)
+  and edge-removal shift (`--round2-graph-shift`, ~10% of edges). Other
+  shift types (new services, correlated noise, weight changes) are
+  supported by the code paths but not measured in the report.
+
 ## Defense notes (for the judges)
 
 - *Why per-edge thresholds?* Edges have different noise/spread profiles;
-  the oracle `theta ≈ noise_amplitude` beats any fixed threshold by ~37%.
+  the oracle (`theta = clip(noise_amp + 0.10)` per edge — a reference
+  heuristic using hidden noise values, unavailable to any real tuner)
+  scores 24.74 ± 10.48 vs 37.70 ± 11.29 for fixed-0.5 — roughly 34%
+  lower, both re-evaluated on the same 24 test seeds (base 2000). The
+  ±10–11 scenario sds mean single-seed comparisons are noisy; the gap is
+  real on average, not on every seed.
 - *Why not just grid-search one threshold?* Same reason — one number cannot
   fit 111 different edges.
 - *Isn't this SIR relabeled?* The mapping is deliberate, but false trips,

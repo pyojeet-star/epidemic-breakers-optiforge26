@@ -25,6 +25,7 @@ from src.utils import (
     get_logger,
     make_rng,
     make_seeds,
+    paired_bootstrap_ci,
     save_convergence_svg,
     write_csv,
 )
@@ -37,7 +38,8 @@ ROUND2_KW = dict(spread_p=0.45, cooldown=12, n_steps=40)
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Epidemic Breakers - OptiForge 2026")
-    p.add_argument("--runs", type=int, default=3, help="independent runs per method")
+    p.add_argument("--runs", type=int, default=None,
+                   help="independent runs per method (default 3; 10 with --ablation)")
     p.add_argument("--train-seeds", type=int, default=24)
     p.add_argument("--test-seeds", type=int, default=12)
     p.add_argument("--pop", type=int, default=30, help="GA population size")
@@ -46,6 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--outdir", type=str, default="results")
     p.add_argument("--quick", action="store_true", help="tiny budgets for smoke tests")
     p.add_argument("--round2", action="store_true", help="run the Round 2 shift experiment")
+    p.add_argument("--round2-graph-shift", action="store_true",
+                   help="also remove ~10% of edges in the Round 2 shift")
+    p.add_argument("--ablation", action="store_true",
+                   help="paired guided vs vanilla GA vs random search over --runs runs")
     return p
 
 
@@ -141,11 +147,29 @@ def run_round2(args) -> list[dict]:
     recover past the stale (non-adapted) Round 1 thresholds, measured on
     Round 2 test seeds. Warm-start = Round 1 final population + diversity
     noise + temporary mutation boost; scratch = fresh population.
+
+    With ``--round2-graph-shift`` the shift additionally removes ~10% of
+    edges; thresholds then follow edge identity (surviving edges keep their
+    values, removed edges are dropped) via :func:`ga.remap_population`.
     """
     G = graph_gen.generate_service_graph(n_nodes=40, seed=7)
     train_seeds = make_seeds(args.train_seeds, base=1000)
     test_seeds = make_seeds(args.test_seeds, base=2000)
     assert not set(train_seeds) & set(test_seeds)
+
+    old_edges = graph_gen.edge_list(G)
+    if args.round2_graph_shift:
+        grng = make_rng(args.seed + 999)
+        G2 = G.copy()
+        n_remove = max(1, int(round(0.10 * len(old_edges))))
+        drop = grng.choice(len(old_edges), size=n_remove, replace=False)
+        for i in sorted(drop, reverse=True):
+            G2.remove_edge(*old_edges[i])
+        log.info("graph shift: removed %d/%d edges (%.0f%%)",
+                 n_remove, len(old_edges), 100 * n_remove / len(old_edges))
+        G_adapt, shift_tag = G2, f"edges-{n_remove}-removed"
+    else:
+        G_adapt, shift_tag = G, "none"
 
     adapt_gens = max(10, args.gens // 2)
     n_reps = 2
@@ -161,7 +185,15 @@ def run_round2(args) -> list[dict]:
                            mutation_mode="guided"),
             make_rng(args.seed + rep), **ROUND1_KW,
         )
-        stale = fitmod.evaluate(G, r1["best"], test_seeds, **ROUND2_KW)
+        # stale: Round 1 thresholds deployed as-is (remapped by edge
+        # identity when the graph shift removed edges)
+        wrng = make_rng(args.seed + 100 + rep)
+        if args.round2_graph_shift:
+            stale_theta = gamod.remap_population(
+                r1["best"].reshape(1, -1), old_edges, G_adapt, wrng)[0]
+        else:
+            stale_theta = r1["best"]
+        stale = fitmod.evaluate(G_adapt, stale_theta, test_seeds, **ROUND2_KW)
         stale_fs.append(stale["F"])
         log.info("rep %d: Round 1 train F=%.3f; stale in Round 2: test F=%.3f",
                  rep, r1["best_F"], stale["F"])
@@ -171,25 +203,28 @@ def run_round2(args) -> list[dict]:
 
         adapt_cfg = gamod.GAConfig(pop_size=args.pop, generations=adapt_gens,
                                    mutation_mode="guided")
-        # warm start: previous population + diversity injection + boost
-        wrng = make_rng(args.seed + 100 + rep)
+        # warm start: previous population (remapped across a graph shift) +
+        # diversity injection + boost
+        base = (gamod.remap_population(r1["final_pop"], old_edges, G_adapt, wrng)
+                if args.round2_graph_shift else r1["final_pop"])
         init = np.clip(
-            r1["final_pop"] + wrng.normal(0.0, 0.08, r1["final_pop"].shape),
+            base + wrng.normal(0.0, 0.08, base.shape),
             0.0, 1.0,
         )
-        warm = gamod.run_ga(G, train_seeds, adapt_cfg, wrng, init_pop=init,
+        warm = gamod.run_ga(G_adapt, train_seeds, adapt_cfg, wrng, init_pop=init,
                             mutation_boost=3.0, boost_gens=10, **ROUND2_KW)
-        scratch = gamod.run_ga(G, train_seeds, adapt_cfg,
+        scratch = gamod.run_ga(G_adapt, train_seeds, adapt_cfg,
                                make_rng(args.seed + 200 + rep), **ROUND2_KW)
 
         for name, res in (("warm-start", warm), ("from-scratch", scratch)):
-            test_curve = [fitmod.evaluate(G, ind, test_seeds, **ROUND2_KW)["F"]
+            test_curve = [fitmod.evaluate(G_adapt, ind, test_seeds, **ROUND2_KW)["F"]
                           for ind in res["best_per_gen"]]
             curves[name].append(test_curve)
             rec = next((g for g, f in enumerate(test_curve) if f <= stale["F"]),
                        None)
             rows.append({
                 "method": name, "rep": rep,
+                "graph_shift": shift_tag,
                 "final_test_F": round(test_curve[-1], 3),
                 "stale_test_F": round(stale["F"], 3),
                 "gens_to_recover": rec if rec is not None else "-",
@@ -202,6 +237,8 @@ def run_round2(args) -> list[dict]:
     mean_stale = float(np.mean(stale_fs))
 
     print("\nROUND 2 RECOVERY (shifted env; lower test F is better)")
+    if args.round2_graph_shift:
+        print(f"graph shift: {shift_tag}")
     print("-" * 70)
     print(f"{'method':<14}{'rep':<5}{'final test F':<14}{'stale F':<10}{'gens_to_recover'}")
     print("-" * 70)
@@ -233,12 +270,129 @@ def run_round2(args) -> list[dict]:
     return rows
 
 
+def run_ablation(args) -> list[dict]:
+    """Paired ablation: guided GA vs vanilla GA vs random search.
+
+    ``args.runs`` runs (default 10; 2 under ``--quick``). Run ``i`` draws
+    its own train/test seed sets and all three methods train and test on
+    those identical sets, so per-run differences are paired. Every method
+    gets the same evaluation budget: ``pop * (gens + 1)``, matching the
+    GA's initial population plus one fitness evaluation per individual
+    per generation.
+
+    Prints per-method mean/sd, the paired (vanilla - guided) differences,
+    and a paired bootstrap 95% CI for the mean difference. Saves per-run
+    rows -- train F, test F and test-F std for each method's final theta,
+    i.e. the train/test diagnostic -- to ``results/ablation.csv`` and the
+    summary to ``results/ablation_summary.csv``.
+    """
+    G = graph_gen.generate_service_graph(n_nodes=40, seed=7)
+    log.info("graph: %d nodes, %d edges", G.number_of_nodes(),
+             G.number_of_edges())
+    n_runs = args.runs
+    budget = args.pop * (args.gens + 1)  # == GA evals: initial pop + one per gen
+    cfg_v = gamod.GAConfig(pop_size=args.pop, generations=args.gens,
+                           mutation_mode="uniform")
+    cfg_g = gamod.GAConfig(pop_size=args.pop, generations=args.gens,
+                           mutation_mode="guided")
+    methods = ["random-search", "vanilla GA", "guided GA"]
+
+    rows: list[dict] = []
+    for run in range(n_runs):
+        train_seeds = make_seeds(args.train_seeds, base=1000 + run)
+        test_seeds = make_seeds(args.test_seeds, base=2000 + run)
+        assert not set(train_seeds) & set(test_seeds)
+
+        t0 = time.time()
+        rs = blmod.random_search(G, train_seeds, test_seeds, budget,
+                                 make_rng(args.seed + 5000 + run), **ROUND1_KW)
+        rows.append(_ablation_row("random-search", run, rs["train_F"],
+                                  rs["test"], rs["evals"], time.time() - t0))
+
+        for name, cfg in (("vanilla GA", cfg_v), ("guided GA", cfg_g)):
+            t0 = time.time()
+            ga_rng = make_rng(args.seed + 6000 + run * 10
+                              + (0 if name == "vanilla GA" else 1))
+            res = gamod.run_ga(G, train_seeds, cfg, ga_rng, **ROUND1_KW)
+            test = fitmod.evaluate(G, res["best"], test_seeds, **ROUND1_KW)
+            rows.append(_ablation_row(name, run, res["best_F"], test,
+                                      res["evals"], time.time() - t0))
+        log.info("ablation run %d/%d done", run + 1, n_runs)
+
+    test_f = {m: np.array([r["test_F"] for r in rows if r["method"] == m])
+              for m in methods}
+    train_f = {m: np.array([r["train_F"] for r in rows if r["method"] == m])
+               for m in methods}
+    diffs = test_f["vanilla GA"] - test_f["guided GA"]  # > 0 favours guided
+    d_mean, d_lo, d_hi = paired_bootstrap_ci(
+        diffs, rng=make_rng(args.seed + 777))
+
+    print(f"\nABLATION: paired runs, equal budget ({budget} evals each)")
+    print("-" * 78)
+    print(f"{'method':<15}{'n':<4}{'train F':<10}{'test F (mean ± sd)':<22}")
+    print("-" * 78)
+    for m in methods:
+        sd = test_f[m].std(ddof=1) if n_runs > 1 else 0.0
+        print(f"{m:<15}{n_runs:<4}{train_f[m].mean():<10.2f}"
+              f"{test_f[m].mean():.2f} ± {sd:.2f}")
+    print("-" * 78)
+    d_sd = diffs.std(ddof=1) if n_runs > 1 else 0.0
+    print(f"paired (vanilla - guided) test F: mean {d_mean:.2f}, sd {d_sd:.2f}")
+    print(f"paired bootstrap 95% CI for the mean difference: "
+          f"[{d_lo:.2f}, {d_hi:.2f}]  (positive favours guided)")
+    n_pos = int((diffs > 0).sum())
+    print(f"guided won {n_pos}/{n_runs} paired runs")
+
+    outdir = ensure_dir(args.outdir)
+    write_csv(outdir / "ablation.csv", rows, list(rows[0].keys()))
+    summary = [
+        {"method": m, "n_runs": n_runs,
+         "mean_train_F": round(float(train_f[m].mean()), 3),
+         "mean_test_F": round(float(test_f[m].mean()), 3),
+         "sd_test_F": round(float(test_f[m].std(ddof=1)) if n_runs > 1 else 0.0, 3),
+         "paired_diff_mean": "", "paired_diff_ci_lo": "", "paired_diff_ci_hi": ""}
+        for m in methods
+    ]
+    summary.append({"method": "paired: vanilla - guided", "n_runs": n_runs,
+                    "mean_train_F": "", "mean_test_F": "",
+                    "sd_test_F": round(float(d_sd), 3),
+                    "paired_diff_mean": round(d_mean, 3),
+                    "paired_diff_ci_lo": round(d_lo, 3),
+                    "paired_diff_ci_hi": round(d_hi, 3)})
+    write_csv(outdir / "ablation_summary.csv", summary,
+              ["method", "n_runs", "mean_train_F", "mean_test_F", "sd_test_F",
+               "paired_diff_mean", "paired_diff_ci_lo", "paired_diff_ci_hi"])
+    log.info("wrote %s, %s", outdir / "ablation.csv",
+             outdir / "ablation_summary.csv")
+    return rows
+
+
+def _ablation_row(method: str, run: int, train_f: float, test: dict,
+                  evals: int, secs: float) -> dict:
+    """One per-run ablation record: train/test diagnostic for a final theta."""
+    return {
+        "method": method,
+        "run": run,
+        "train_F": round(train_f, 3),
+        "test_F": round(test["F"], 3),
+        "test_F_std": round(test["F_std"], 3),
+        "evals": evals,
+        "secs": round(secs, 1),
+    }
+
+
 def main() -> None:
     args = build_parser().parse_args()
     if args.quick:  # tiny budgets for smoke tests
         args.pop, args.gens = 8, 6
-        args.train_seeds, args.test_seeds, args.runs = 4, 4, 2
-    if args.round2:
+        args.train_seeds, args.test_seeds = 4, 4
+        if args.runs is None:
+            args.runs = 2
+    if args.runs is None:
+        args.runs = 10 if args.ablation else 3
+    if args.ablation:
+        run_ablation(args)
+    elif args.round2:
         run_round2(args)
     else:
         run_comparison(args)
