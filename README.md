@@ -202,7 +202,20 @@ adapts steadily. Both adapted methods beat doing nothing (stale mean
   the two per method.
 - **Oracle is a heuristic**: `theta = clip(noise_amp + 0.10)` uses hidden
   per-edge noise values no real tuner can see. It marks headroom, not a
-  ceiling — a method beating it would not be a contradiction.
+  ceiling — a method beating it would not be a contradiction. The +0.10
+  margin itself is arbitrary: margin 0 scores 23.15 ± 9.72, slightly
+  better than the canonical +0.10 (24.74 ± 10.48) on the same 24 test
+  seeds. Don't over-interpret the exact margin.
+- **Round-1 table provenance**: the table's figures (incl. fixed-0.5 =
+  40.56) come from the original full run, whose per-run CSVs were
+  overwritten by `--quick` smoke runs before the initial commit and are
+  no longer in the repo. Re-evaluating fixed-0.5 today on the documented
+  24 test seeds (base 2000) gives 37.70 ± 11.29, so the original run's
+  exact seed/code setup is not fully recoverable — treat 40.56 as that
+  run's reported figure, and use the same-seed re-evaluations
+  (37.70 ± 11.29 vs oracle 24.74 ± 10.48) for apples-to-apples claims.
+  `python3 main.py --outdir results` regenerates the table from scratch
+  (~20 min, deterministic seeds).
 - **Shifts tested**: environment shift (spread 0.25→0.45, cooldown 5→12)
   and edge-removal shift (`--round2-graph-shift`, ~10% of edges). Other
   shift types (new services, correlated noise, weight changes) are
@@ -213,7 +226,10 @@ adapts steadily. Both adapted methods beat doing nothing (stale mean
 - *Why per-edge thresholds?* Edges have different noise/spread profiles;
   the oracle (`theta = clip(noise_amp + 0.10)` per edge — a reference
   heuristic using hidden noise values, unavailable to any real tuner)
-  beats any fixed threshold by ~39% (24.74 vs 40.56 test F).
+  scores 24.74 ± 10.48 vs 37.70 ± 11.29 for fixed-0.5 — roughly 34%
+  lower, both re-evaluated on the same 24 test seeds (base 2000). The
+  ±10–11 scenario sds mean single-seed comparisons are noisy; the gap is
+  real on average, not on every seed.
 - *Why not just grid-search one threshold?* Same reason — one number cannot
   fit 111 different edges.
 - *Isn't this SIR relabeled?* The mapping is deliberate, but false trips,
