@@ -68,8 +68,9 @@ results/           # CSV tables + convergence plot (generated)
 
 ```bash
 pip install -r requirements.txt   # numpy, networkx, pytest
-pytest tests/ -q                  # 20 tests
+pytest tests/ -q                  # 27 tests
 python3 main.py                   # full comparison (~20 min, 3 runs/method)
+python3 main.py --ablation        # paired ablation, 10 runs/method (~60 min)
 python3 main.py --quick           # smoke test (~15 s)
 python3 main.py --round2          # Round 2 shift experiment
 ```
@@ -102,6 +103,17 @@ Two demos, different trade-offs:
   (repo `venky29823/epidemic-breakers-optiforge26`, branch `main`, main
   file `streamlit_app.py`).
 
+> **Note for the website repo** (`epidemic-breakers-web`, updated
+> separately — do not edit it from here): its oracle wording still calls
+> the oracle an "information-theoretic ceiling". To match the canonical
+> definition used in this repo, change these exact strings in
+> `epidemic-breakers-web/index.html`:
+>
+> 1. `Oracle (noise&nbsp;+&nbsp;0.1)` → `Oracle reference (hidden noise + 0.10)`
+> 2. `Oracle: θ set just above each edge's true noise amplitude — the information-theoretic ceiling, unavailable to any real tuner.`
+>    →
+>    `Oracle reference: θ_e = clip(noise_amp_e + 0.10, 0, 1), a heuristic using hidden per-edge noise values. It is not available to any real tuner and is not a ceiling.`
+
 Pick a threshold strategy (fixed slider, precomputed GA-optimized, or the
 oracle reference), tweak spread probability / cooldown / noise, and watch
 the epidemic curve plus the `F` breakdown — or run a head-to-head
@@ -124,8 +136,21 @@ What the numbers actually say:
 - Both GAs beat the fixed baseline clearly on held-out seeds (~12–18%).
   The oracle (`theta = clip(noise_amp + 0.10)` per edge — a reference
   heuristic using hidden noise values, not available to any real tuner)
-  scores 25.69 on the same test seeds, so real headroom exists and the
-  GAs capture part of it.
+  scores 24.74 ± 10.48 (mean ± sd over the 24 test scenarios) on the same
+  test seeds, so real headroom exists and the
+  GAs capture part of it. Reproduce it exactly with:
+
+  ```bash
+  python3 - <<'EOF'
+  from src import graph_gen, baselines as bl, fitness as fit
+  from src.utils import make_seeds
+  from main import ROUND1_KW
+  G = graph_gen.generate_service_graph(n_nodes=40, seed=7)
+  theta = bl.oracle_thresholds(G)  # canonical: clip(noise_amp + 0.10)
+  r = fit.evaluate(G, theta, make_seeds(24, base=2000), **ROUND1_KW)
+  print(f"oracle test F = {r['F']:.2f} ± {r['F_std']:.2f}")
+  EOF
+  ```
 - The ablation is a modest, consistent win: guided beats vanilla on
   2 of 3 paired runs (34.52 vs 39.31, 33.72 vs 33.49, 31.59 vs 34.24),
   with ~7% better mean test F and half the run-to-run variance
@@ -188,7 +213,7 @@ adapts steadily. Both adapted methods beat doing nothing (stale mean
 - *Why per-edge thresholds?* Edges have different noise/spread profiles;
   the oracle (`theta = clip(noise_amp + 0.10)` per edge — a reference
   heuristic using hidden noise values, unavailable to any real tuner)
-  beats any fixed threshold by ~37% (25.69 vs 40.56 test F).
+  beats any fixed threshold by ~39% (24.74 vs 40.56 test F).
 - *Why not just grid-search one threshold?* Same reason — one number cannot
   fit 111 different edges.
 - *Isn't this SIR relabeled?* The mapping is deliberate, but false trips,
